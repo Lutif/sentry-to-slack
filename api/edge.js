@@ -2,15 +2,16 @@ export const config = {
   runtime: 'edge',
 }
 
-const sendMessage = async (channel, {level, formatted, environment, email, title, culprit, project}) => {
+const sendMessage = async (channel, {level, formatted, environment, email, title, culprit, project, permalink}) => {
   const isError = level === "error";
-  
+  const titleText = permalink ? `<${permalink}|${title}>` : title;
+
   const blocks = [
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": `${isError ? ":red_circle:" : ""} *${title}*`
+        "text": `${isError ? ":red_circle:" : ""} *${titleText}*`
       }
     },
     {
@@ -34,7 +35,7 @@ const sendMessage = async (channel, {level, formatted, environment, email, title
     },
     {
       "type": "section",
-      "text": { "type": "mrkdwn", "text": `*Culprit:*\n${culprit}` }
+      "text": { "type": "mrkdwn", "text": `*Culprit:*\n\`${culprit}\`` }
     },
     { "type": "divider" },
   ];
@@ -80,19 +81,31 @@ export default async (req) => {
     return new Response('Bad Request: Invalid JSON', { status: 400 });
   }
 
-  const payloadData = body?.data || body;
-  const event = payloadData?.event || payloadData || {};
+  const payloadData = body?.data || {};
+  // Sentry integration webhooks send the issue at data.issue; event-alert webhooks send data.event
+  const source = payloadData.issue || payloadData.event || payloadData;
 
-  const project = payloadData?.project || payloadData?.project_name || 'Unknown Project';
-  const culprit = payloadData?.culprit || event?.culprit || 'Unknown Culprit';
-  
-  const level = event?.level || 'info';
-  const formatted = event?.logentry?.formatted || event?.message || payloadData?.message || 'No message provided';
-  const email = event?.user?.email || 'Unknown User';
-  const environment = event?.environment || 'production';
-  const title = event?.metadata?.title || event?.title || 'Sentry Alert';
+  const projectField = source?.project;
+  const project =
+    (projectField && (projectField.slug || projectField.name)) ||
+    payloadData?.project_name ||
+    payloadData?.project ||
+    'Unknown Project';
 
-  await sendMessage(process.env.CHANNEL_ID, {level, formatted, environment, email, title, culprit, project});
+  const culprit = source?.culprit || 'Unknown Culprit';
+  const level = source?.level || 'info';
+  const formatted =
+    source?.metadata?.value ||
+    source?.logentry?.formatted ||
+    source?.message ||
+    source?.title ||
+    'No message provided';
+  const email = source?.user?.email || source?.assignedTo?.email || 'Unknown User';
+  const environment = source?.environment || 'production';
+  const title = source?.metadata?.title || source?.title || 'Sentry Alert';
+  const permalink = source?.permalink || source?.web_url || null;
+
+  await sendMessage(process.env.CHANNEL_ID, {level, formatted, environment, email, title, culprit, project, permalink});
 
   return new Response(`Webhook Processed Successfully`, { status: 200 });
 }
